@@ -1,0 +1,25 @@
+{
+  "name": "homebridge-http-opensprinkler",
+  "version": "1.0.0",
+  "description": "Homebridge OpenSprinkler control through HTTP",
+  "license": "ISC",
+  "keywords": [
+  "homebridge-plugin"
+  ],
+  "engines": {
+    "node": ">=4.3.2",
+    "homebridge": ">=0.4.0"
+  },
+  "author": {
+    "name": "szazketto"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/szazketto/homebridge-http-opensprinkler"
+  },
+  "dependencies": {
+    "polling-to-event": ">=2.1.0",
+    "sync-request": "^2.1.0",
+    "request": "^2.67.0"
+  }
+}

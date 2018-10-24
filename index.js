@@ -1,0 +1,386 @@
+var Service, Characteristic;
+var syncRequest = require('sync-request');
+var request = require("request");
+var pollingtoevent = require('polling-to-event');
+
+
+module.exports = function(homebridge) 
+{
+    Service = homebridge.hap.Service;
+    Characteristic = homebridge.hap.Characteristic;
+    homebridge.registerAccessory("homebridge-http-opensprinkler", "HttpOpenSprinkler", HttpOpenSprinkler);
+};
+
+
+function HttpOpenSprinkler(log, config) 
+{
+	this.log = log;
+	
+	// Get config info
+	this.name		= config["name"]          	|| "HTTP OpenSprinkler";
+	this.icon		= config["icon"]		|| 0
+	this.onUrl              = config["onUrl"];
+	this.offUrl             = config["offUrl"];
+	this.timeout            = config["timeout"]             || 5000;
+	this.checkStatus 	= config["checkStatus"]		|| "no";
+	this.pollingInterval    = config["pollingInterval"]   	|| 3000;
+	this.statusUrl          = config["statusUrl"];
+	this.onValue		= config["onValue"]		|| "1";
+	this.offValue		= config["offValue"]		|| "0";
+	this.useTimer		= config["useTimer"]		|| "no";
+	this.defaultTime	= config["defaultTime"]		|| 300;
+	this.httpMethod         = config["httpMethod"]   	|| "GET";
+	
+
+	//realtime polling info
+	this.statusOn = false;
+	var that = this;
+
+	// Status Polling
+	if (this.statusUrl && this.checkStatus === "polling") 
+	{
+		var powerurl = this.statusUrl;
+		var statusemitter = pollingtoevent(function (done)
+			{
+			that.httpRequest(powerurl, "", "GET", function (error, response, body)
+				{
+					if (error)
+					{
+						that.log('HTTP get status function failed: %s', error.message);
+						try 
+						{
+							done(new Error("Network failure that must not stop homebridge!"));
+						} catch (err) 
+						{
+							that.log(err.message);
+						}
+					} 
+					else 
+					{
+						done(null, body);
+					}
+			})
+		}, { interval: that.pollingInterval, eventName: "statuspoll" });
+
+
+		statusemitter.on("statuspoll", function (responseBody) 
+		{
+			if (that.onValue && that.offValue) 
+			{
+				var status = responseBody;
+				
+				if (status == that.onValue)
+				{
+					//that.log("State is currently: ON");
+					
+					that.valveService.getCharacteristic(Characteristic.Active)
+					.updateValue(1);
+		   
+					that.valveService.getCharacteristic(Characteristic.InUse)
+					.updateValue(1);
+				}
+				
+				if (status == that.offValue)
+				{
+					//that.log("State is currently: OFF");
+					
+					that.valveService.getCharacteristic(Characteristic.InUse)
+					.updateValue(0);
+					
+					that.valveService.getCharacteristic(Characteristic.Active)
+					.updateValue(0);
+				}
+			}
+
+		});
+	}
+}
+
+
+HttpOpenSprinkler.prototype = 
+{
+
+	httpRequest: function (url, body, method, callback) 
+	{
+		var callbackMethod = callback;
+		
+		request({
+			url: url,
+			body: body,
+			method: method,
+			timeout: this.timeout,
+			rejectUnauthorized: false
+			},
+			function (error, response, responseBody) 
+			{
+				if (callbackMethod) 
+				{
+					callbackMethod(error, response, responseBody)
+				}
+				else 
+				{
+					//this.log("callbackMethod not defined!");
+				}
+			})
+	},
+		
+
+	getPowerState: function (callback) 
+	{
+		if (!this.statusUrl || !this.offValue) 
+		{
+			this.log("Ignoring request: Missing status properties in config.json.");
+			callback(new Error("No status url defined."));
+			return;
+		}
+
+		var url = this.statusUrl;
+				
+		this.httpRequest(url, "", "GET", function (error, response, responseBody) 
+		{
+			if (error) 
+			{
+				this.log('HTTP get status function failed: %s', error.message);
+				callback(error);
+			}
+			else 
+			{
+				var powerOn = false;
+				var status = responseBody;
+				
+				if (status != this.offValue) 
+				{
+					powerOn = true;
+				}
+				else 
+				{
+					powerOn = false;
+				}
+				
+				//this.log("status received from: " + url, "state is currently: ", powerOn.toString());
+				callback(null, powerOn);
+			}
+		}.bind(this));
+	},
+	
+	
+	setPowerState: function (powerOn, callback) 
+	{
+		var url;
+		var body;
+		var inuse;
+		
+		var that = this;
+		
+		if (!this.onUrl || !this.offUrl) 
+		{
+			this.log("Ignoring request: No power url defined.");
+			callback(new Error("No power url defined."));
+			return;
+		}
+
+		if (powerOn) 
+		{
+			url = this.onUrl;
+			inuse = 1;
+			this.log("Turning sprinkler-valve on");
+		} 
+		else 
+		{
+			url = this.offUrl;
+			inuse = 0;
+			this.log("Turning sprinkler-valve off");
+		}
+		
+		this.httpRequest(url, "", "GET", function (error, response, body)
+		{
+			if (error)
+			{
+				that.log("HTTP set status function failed %s", error.message);
+			} 
+		}.bind(this))	
+		
+		this.log("HTTP power function succeeded!");
+		this.valveService.getCharacteristic(Characteristic.InUse).updateValue(inuse);
+		callback();
+		
+	},
+	
+	
+	setPowerStatePolling: function (powerOn, callback) 
+	{
+		var url;
+		var body;
+		var inuse;
+		
+		var that = this;
+		
+		if (!this.onUrl || !this.offUrl) 
+		{
+			this.log("Ignoring request: No power url defined.");
+			callback(new Error("No power url defined."));
+			return;
+		}
+
+		if (powerOn) 
+		{
+			url = this.onUrl;
+			inuse = 1;
+			this.log("Turning sprinkler-valve on");
+		} 
+		else 
+		{
+			url = this.offUrl;
+			inuse = 0;
+			this.log("Turning sprinkler-valve off");
+		}
+		
+		this.httpRequest(url, "", "GET", function (error, response, body)
+		{
+			if (error)
+			{
+				that.log("HTTP set status function failed %s", error.message);
+			} 
+		}.bind(this))	
+		
+		// InUse characteristic is set with the polling mechanism
+		
+		callback();
+		
+	},
+	
+	
+	setDurationTime: function(data, callback)
+	{
+		console.log("Valve Time Duration Set to: " + data.newValue + " seconds")
+		
+		if(this.valveService.getCharacteristic(Characteristic.InUse).value)
+		{
+			this.valveService.getCharacteristic(Characteristic.RemainingDuration)
+				.updateValue(data.newValue);
+			
+			// clear any existing timer
+			clearTimeout(this.valveService.timer);
+			
+			this.valveService.timer = setTimeout( ()=> 
+			{
+				console.log("Valve Timer Expired. Shutting off Valve");
+				// use 'setvalue' when the timer ends so it triggers the .on('set'...) event
+				this.valveService.getCharacteristic(Characteristic.Active).setValue(0); 
+			}, (data.newValue *1000));	
+		}
+	},
+	
+	
+	setRemainingTime: function(data, callback)
+	{
+		switch(data.newValue)
+		{
+			case 0:
+			{
+				this.valveService.getCharacteristic(Characteristic.RemainingDuration).updateValue(0);
+				clearTimeout(this.valveService.timer); // clear the timer if it was used
+				break;
+			}
+			case 1:
+			{
+				var timer = this.valveService.getCharacteristic(Characteristic.SetDuration).value;
+					
+				this.valveService.getCharacteristic(Characteristic.RemainingDuration)
+					.updateValue(timer);
+									
+				console.log("Turning Valve "
+				    	+ this.name
+				    	+ " on with Timer set to: "
+				    	+ timer
+				    	+ " seconds");									
+					
+				this.valveService.timer = setTimeout( ()=> 
+				{
+					console.log("Valve Timer Expired. Shutting off Valve");
+			
+					// use 'setvalue' when the timer ends so it triggers the .on('set'...) event
+					this.valveService.getCharacteristic(Characteristic.Active).setValue(0); 
+				}, (timer *1000));
+				break;
+			}
+		}
+	},
+	
+	
+	getServices: function ()
+	{
+		var that = this;
+		
+		var informationService = new Service.AccessoryInformation();
+
+		informationService
+			.setCharacteristic(Characteristic.Manufacturer, "Hunter")
+			.setCharacteristic(Characteristic.Model, "PGV")
+			.setCharacteristic(Characteristic.SerialNumber, "12345");
+
+		this.valveService = new Service.Valve(this.name);
+		
+		this.valveService.getCharacteristic(Characteristic.ValveType).updateValue(this.icon);
+		//this.valveService.addCharacteristic(Characteristic.IsConfigured);
+
+		switch (this.checkStatus)
+		{
+			//Status polling
+			case "once":
+				this.log("Check status: once");
+				var powerState = this.getPowerState.bind(this)
+				var powerStateInt = 0
+				
+				this.valveService
+					.getCharacteristic(Characteristic.Active)
+					.on('set', this.setPowerState.bind(this))
+					.on('get', powerState);
+				
+				if (powerState) { powerStateInt = 1 }
+				else { powerStateInt = 0}
+				
+				this.valveService.getCharacteristic(Characteristic.InUse)
+					.updateValue(powerStateInt);
+				
+                        break;
+			case "polling":
+				that.log("Check status: polling");
+				this.valveService
+					.getCharacteristic(Characteristic.Active)
+					.on('get', function (callback) 
+					{ callback(null, that.statusOn) })
+					
+					.on('set', this.setPowerStatePolling.bind(this))
+				
+			break;
+			default:
+				that.log("Check status: default");
+				this.valveService
+					.getCharacteristic(Characteristic.Active)
+					.on('set', this.setPowerState.bind(this))
+				
+			break;
+                }
+		
+		if (this.useTimer == "yes") 
+		{
+			this.valveService.addCharacteristic(Characteristic.SetDuration);
+			this.valveService.addCharacteristic(Characteristic.RemainingDuration);
+			
+			// Set initial runtime from config
+			this.valveService.getCharacteristic(Characteristic.SetDuration).setValue(this.defaultTime);
+			
+			this.valveService.getCharacteristic(Characteristic.SetDuration)
+				.on('change', this.setDurationTime.bind(this));
+			
+			this.valveService.getCharacteristic(Characteristic.RemainingDuration)
+				.on('change', (data) => { console.log("Valve Remaining Duration changed to: " + data.newValue) })
+
+			this.valveService.getCharacteristic(Characteristic.InUse)
+				.on('change', this.setRemainingTime.bind(this));
+		}
+		
+		return [this.valveService];
+	}
+};
